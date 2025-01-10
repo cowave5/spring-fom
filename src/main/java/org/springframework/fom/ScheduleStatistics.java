@@ -1,24 +1,15 @@
 package org.springframework.fom;
 
+import org.springframework.util.Assert;
+
 import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Calendar;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
-
-import org.springframework.util.Assert;
 
 /**
  *
@@ -39,23 +30,25 @@ public class ScheduleStatistics {
 
 	private static final String STAT_DAY = "saveday";
 
-	private static final int DEFAULT_STAT_LEVEL_1 = 1000;
+	private static final int DEFAULT_STAT_LEVEL_1 = 100;
 
-	private static final int DEFAULT_STAT_LEVEL_2 = 10000;
+	private static final int DEFAULT_STAT_LEVEL_2 = 500;
 
-	private static final int DEFAULT_STAT_LEVEL_3 = 60000;
+	private static final int DEFAULT_STAT_LEVEL_3 = 1000;
 
-	private static final int DEFAULT_STAT_LEVEL_4 = 600000;
+	private static final int DEFAULT_STAT_LEVEL_4 = 1500;
 
-	private static final int DEFAULT_STAT_LEVEL_5 = 3600000;
+	private static final int DEFAULT_STAT_LEVEL_5 = 2000;
 
 	private static final int DEFAULT_STAT_DAY = 7;
 
+	// 成功数
 	private final AtomicLong success = new AtomicLong(0);
 
+	// 失败数
 	private final AtomicLong failed = new AtomicLong(0);
 
-	private final LinkedList<String> dayHasSaved = new LinkedList<>();
+	private final TreeSet<String> dayHasSaved = new TreeSet<>();
 
 	// map<day, queue>
 	private final Map<String, ConcurrentLinkedQueue<Result<?>>> successMap = new ConcurrentHashMap<>();
@@ -95,37 +88,47 @@ public class ScheduleStatistics {
 
 	void record(String scheduleName, Result<?> result){
 		if(result.isSuccess()){
-			record(result, success, successMap);
+			recordSuccess(result);
 		}else{
-			record(result, failed, failedMap);
+			recordFailed(result);
 		}
 	}
 
-	private void record(Result<?> result, AtomicLong count, Map<String, ConcurrentLinkedQueue<Result<?>>> statMap){
-		count.incrementAndGet();
+	private void recordSuccess(Result<?> result){
+		success.incrementAndGet();
 
 		String day = new SimpleDateFormat("yyyy/MM/dd").format(System.currentTimeMillis());
-		ConcurrentLinkedQueue<Result<?>> queue = statMap.get(day);
-		// 尽量避免使用同步，虽然api中免不了也有同步的使用
-		if(queue == null){
-			queue = new ConcurrentLinkedQueue<>();
-			ConcurrentLinkedQueue<Result<?>> exist = statMap.putIfAbsent(day, queue);
-			if(exist == null){
-				// dayHasSaved由每天第一个放入queue的线程负责检测，不存在多线程访问场景
-				// 虽然每次不是同一个线程访问，但一天只检测一次，线程安全问题暂且忽略
-				dayHasSaved.add(day);
-				while(dayHasSaved.size() > statConfigMap.get(STAT_DAY)){
-					statMap.remove(dayHasSaved.removeLast());
-				}
-			}else{
-				queue = exist;
-			}
+		ConcurrentLinkedQueue<Result<?>> dayQueue =
+				successMap.computeIfAbsent(day, key -> new ConcurrentLinkedQueue<>());
+		dayQueue.add(result);
+
+		// 保留有限天数
+		dayHasSaved.add(day);
+		if(dayHasSaved.size() > statConfigMap.get(STAT_DAY)){
+			String historyDay = dayHasSaved.pollFirst();
+			successMap.remove(historyDay);
+		}
+	}
+
+	private void recordFailed(Result<?> result){
+		failed.incrementAndGet();
+
+		String day = new SimpleDateFormat("yyyy/MM/dd").format(System.currentTimeMillis());
+		ConcurrentLinkedQueue<Result<?>> dayQueue =
+				failedMap.computeIfAbsent(day, key -> new ConcurrentLinkedQueue<>());
+
+		// 每天最多保留10异常堆栈
+		dayQueue.add(result);
+		int num = dayQueue.size() - 10;
+		for(int i=0; i<num; i++){
+			dayQueue.poll();
 		}
 
-		queue.add(result);
-		int num = queue.size() - 10;
-		for(int i=0; i<num; i++){
-			queue.poll();
+		// 保留有限天数
+		dayHasSaved.add(day);
+		if(dayHasSaved.size() > statConfigMap.get(STAT_DAY)){
+			String historyDay = dayHasSaved.pollFirst();
+			failedMap.remove(historyDay);
 		}
 	}
 

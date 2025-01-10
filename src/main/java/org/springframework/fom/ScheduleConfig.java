@@ -107,7 +107,7 @@ public class ScheduleConfig {
 	/**
 	 * 加载后默认不立即执行
 	 */
-	public static final boolean DEFAULT_execOnLoad = false;
+	public static final boolean DEFAULT_execOnLoad = true;
 
 	/**
 	 * fixedRate 默认0
